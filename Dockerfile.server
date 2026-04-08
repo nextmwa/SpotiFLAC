@@ -1,0 +1,90 @@
+# SpotiFLAC HTTP Server Dockerfile
+# Multi-stage build for minimal final image
+
+# Build stage - use Debian for better compatibility
+FROM golang:latest AS builder
+
+# Allow Go to download the required toolchain version
+ENV GOTOOLCHAIN=auto
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    gcc \
+    pkg-config \
+    libwebkit2gtk-4.1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code (excluding frontend/dist which may not exist)
+COPY backend/ backend/
+COPY *.go ./
+COPY wails.json ./
+
+# Create a minimal frontend/dist to satisfy the embed directive
+RUN mkdir -p frontend/dist && \
+    echo '<!DOCTYPE html><html><body>Server Mode</body></html>' > frontend/dist/index.html
+
+# Build the server binary
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o spotiflac-server .
+
+# Runtime stage - use Debian slim for glibc compatibility
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    ca-certificates \
+    tzdata \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 spotiflac
+
+# Create necessary directories
+RUN mkdir -p /data/downloads/spotiflac /home/spotiflac/.spotiflac && \
+    chown -R spotiflac:spotiflac /data /home/spotiflac
+
+# Copy binary from builder
+COPY --from=builder /app/spotiflac-server /usr/local/bin/spotiflac-server
+
+# Set ownership
+RUN chmod +x /usr/local/bin/spotiflac-server
+
+# Switch to non-root user
+USER spotiflac
+
+# Set working directory
+WORKDIR /data
+
+# Expose HTTP port
+EXPOSE 8787
+
+# Environment variables with defaults
+ENV PORT=8787 \
+    OUTPUT_DIR=/data/downloads/spotiflac \
+    SERVICE=amazon \
+    QUALITY=LOSSLESS \
+    EMBED_LYRICS=true \
+    EMBED_COVER=true \
+    FILENAME_FORMAT=title-artist
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/api/health || exit 1
+
+# Default command
+ENTRYPOINT ["spotiflac-server"]
+CMD ["--server", \
+     "--port", "8787", \
+     "--output", "/data/downloads/spotiflac", \
+     "--service", "amazon", \
+     "--quality", "LOSSLESS", \
+     "--embed-lyrics=true", \
+     "--embed-cover=true"]
