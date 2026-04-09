@@ -712,7 +712,7 @@ func (s *Server) downloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			quality = "6" // FLAC 16-bit
 		}
 		filename, err = downloader.DownloadTrackWithISRC(
-			isrc, req.SpotifyID, req.OutputDir, quality, req.FilenameFormat,
+			isrc, req.OutputDir, quality, req.FilenameFormat,
 			req.TrackNumber, req.Position,
 			req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate,
 			req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover,
