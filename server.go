@@ -179,12 +179,12 @@ const uiHTML = `<!DOCTYPE html>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: #0f0f13; color: #e0e0e0;
-      min-height: 100vh; display: flex;
-      align-items: center; justify-content: center; padding: 24px;
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; padding: 24px; gap: 20px;
     }
     .card {
       background: #1a1a24; border: 1px solid #2a2a3a;
-      border-radius: 12px; padding: 32px; width: 100%; max-width: 560px;
+      border-radius: 12px; padding: 32px; width: 100%; max-width: 680px;
     }
     h1 { font-size: 20px; font-weight: 600; margin-bottom: 24px; color: #fff; }
     h1 span { color: #1db954; }
@@ -203,10 +203,7 @@ const uiHTML = `<!DOCTYPE html>
     select option { background: #1a1a24; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     .toggles { display: flex; gap: 16px; margin-bottom: 24px; }
-    .toggle-item {
-      display: flex; align-items: center; gap: 10px;
-      cursor: pointer; user-select: none;
-    }
+    .toggle-item { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
     .toggle-item input[type="checkbox"] { display: none; }
     .toggle {
       width: 40px; height: 22px; background: #2a2a3a;
@@ -235,6 +232,69 @@ const uiHTML = `<!DOCTYPE html>
     #status.error   { background: #280d0d; border: 1px solid #c0392b; color: #e74c3c; }
     #status.loading { background: #0d1828; border: 1px solid #3498db; color: #3498db; }
     pre { margin-top: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; opacity: 0.8; }
+
+    /* Queue panel */
+    .queue-card {
+      background: #1a1a24; border: 1px solid #2a2a3a;
+      border-radius: 12px; width: 100%; max-width: 680px; overflow: hidden;
+    }
+    .queue-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px; border-bottom: 1px solid #2a2a3a;
+    }
+    .queue-title { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+    .queue-stats { display: flex; gap: 14px; }
+    .stat { font-size: 12px; }
+    .stat-queued    { color: #888; }
+    .stat-download  { color: #3498db; }
+    .stat-done      { color: #1db954; }
+    .stat-skip      { color: #f39c12; }
+    .stat-fail      { color: #e74c3c; }
+    .queue-actions { display: flex; gap: 8px; }
+    .btn-clear {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid #2a2a3a;
+      background: transparent; color: #666; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+    }
+    .btn-clear:hover { color: #e74c3c; border-color: #e74c3c; }
+    .queue-log {
+      font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+      font-size: 12px; max-height: 420px; overflow-y: auto;
+      padding: 12px 0;
+    }
+    .queue-log:empty::after {
+      content: 'Nessuna attività nella sessione corrente.';
+      display: block; padding: 12px 20px; color: #444; font-style: italic;
+    }
+    .log-row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      align-items: baseline;
+      gap: 10px;
+      padding: 5px 20px;
+      border-bottom: 1px solid #1a1a1f;
+      transition: background 0.1s;
+    }
+    .log-row:last-child { border-bottom: none; }
+    .log-row:hover { background: #20202e; }
+    .log-icon { text-align: center; font-size: 13px; }
+    .log-text { overflow: hidden; }
+    .log-track { color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .log-album  { color: #555; font-size: 11px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .log-meta { font-size: 11px; white-space: nowrap; text-align: right; }
+    .log-row.s-queued     .log-icon { color: #555; }
+    .log-row.s-queued     .log-meta { color: #555; }
+    .log-row.s-downloading .log-icon { color: #3498db; }
+    .log-row.s-downloading .log-track { color: #fff; }
+    .log-row.s-downloading .log-meta { color: #3498db; }
+    .log-row.s-completed  .log-icon { color: #1db954; }
+    .log-row.s-completed  .log-meta { color: #1db954; }
+    .log-row.s-skipped    .log-icon { color: #f39c12; }
+    .log-row.s-skipped    .log-meta { color: #666; }
+    .log-row.s-failed     .log-icon { color: #e74c3c; }
+    .log-row.s-failed     .log-track { color: #e74c3c; }
+    .log-row.s-failed     .log-meta { color: #e74c3c; }
+    .pulse { animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   </style>
 </head>
 <body>
@@ -278,8 +338,27 @@ const uiHTML = `<!DOCTYPE html>
     <button id="btn" onclick="send()">Importa</button>
     <div id="status"></div>
   </div>
+
+  <div class="queue-card">
+    <div class="queue-header">
+      <span class="queue-title">Queue</span>
+      <div class="queue-stats">
+        <span class="stat stat-queued"  id="sq">&#9632; <span id="cnt-queued">0</span> in coda</span>
+        <span class="stat stat-download" id="sd" style="display:none">&#9654; <span id="cnt-dl">0</span> download</span>
+        <span class="stat stat-done"    id="sc">&#10003; <span id="cnt-done">0</span></span>
+        <span class="stat stat-skip"    id="ss" style="display:none">&#8594; <span id="cnt-skip">0</span> skip</span>
+        <span class="stat stat-fail"    id="sf" style="display:none">&#10007; <span id="cnt-fail">0</span></span>
+      </div>
+      <div class="queue-actions">
+        <button class="btn-clear" onclick="clearQueue()">Svuota</button>
+      </div>
+    </div>
+    <div class="queue-log" id="qlog"></div>
+  </div>
+
   <script>
     const $ = id => document.getElementById(id);
+
     document.addEventListener('paste', e => {
       const text = (e.clipboardData || window.clipboardData).getData('text');
       if (text.includes('spotify.com') && !document.activeElement.matches('input')) {
@@ -287,6 +366,7 @@ const uiHTML = `<!DOCTYPE html>
       }
     });
     $('url').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
     async function send() {
       const url = $('url').value.trim();
       if (!url) { showStatus('Inserisci un URL Spotify.', 'error'); return; }
@@ -320,6 +400,7 @@ const uiHTML = `<!DOCTYPE html>
         $('btn').disabled = false;
       }
     }
+
     function showStatus(msg, type) {
       const el = $('status');
       el.style.display = 'block';
@@ -327,6 +408,108 @@ const uiHTML = `<!DOCTYPE html>
       const [first, ...rest] = msg.split('\n');
       el.innerHTML = first + (rest.length ? '<pre>' + rest.join('\n') + '</pre>' : '');
     }
+
+    /* ── Queue polling ── */
+    const ICONS = {
+      queued:      '·',
+      downloading: '▶',
+      completed:   '✓',
+      skipped:     '→',
+      failed:      '✗',
+    };
+
+    function fmtSize(mb) {
+      if (!mb) return '';
+      return mb >= 1 ? mb.toFixed(1) + ' MB' : (mb * 1024).toFixed(0) + ' KB';
+    }
+    function fmtSpeed(mbps) {
+      if (!mbps) return '';
+      return mbps.toFixed(1) + ' MB/s';
+    }
+
+    let prevItems = {};
+
+    async function pollQueue() {
+      try {
+        const res = await fetch('/api/queue');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderQueue(data);
+      } catch (_) {}
+    }
+
+    function renderQueue(data) {
+      const items = data.items || [];
+
+      /* stats bar */
+      const cntQ = items.filter(i => i.status === 'queued').length;
+      const cntD = items.filter(i => i.status === 'downloading').length;
+      const cntC = data.completed || 0;
+      const cntS = data.skipped  || 0;
+      const cntF = data.failed   || 0;
+
+      $('cnt-queued').textContent = cntQ;
+      $('cnt-dl').textContent     = cntD;
+      $('cnt-done').textContent   = cntC;
+      $('cnt-skip').textContent   = cntS;
+      $('cnt-fail').textContent   = cntF;
+      $('sd').style.display = cntD > 0 ? '' : 'none';
+      $('ss').style.display = cntS > 0 ? '' : 'none';
+      $('sf').style.display = cntF > 0 ? '' : 'none';
+
+      /* log rows — newest first (reverse) */
+      const log = $('qlog');
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+
+      log.innerHTML = '';
+      const sorted = [...items].reverse();
+      for (const item of sorted) {
+        const status = item.status || 'queued';
+        const icon   = ICONS[status] || '·';
+
+        let meta = '';
+        if (status === 'downloading') {
+          const parts = [];
+          if (item.progress) parts.push(fmtSize(item.progress));
+          if (item.speed)    parts.push(fmtSpeed(item.speed));
+          meta = parts.join(' · ');
+        } else if (status === 'completed') {
+          meta = fmtSize(item.total_size) || 'ok';
+        } else if (status === 'failed') {
+          meta = item.error_message || 'errore';
+        } else if (status === 'skipped') {
+          meta = 'già presente';
+        }
+
+        const row = document.createElement('div');
+        row.className = 'log-row s-' + status;
+        const iconCls = status === 'downloading' ? 'log-icon pulse' : 'log-icon';
+        const artist = item.artist_name ? item.artist_name + ' — ' : '';
+        const album  = item.album_name  ? item.album_name : '';
+        row.innerHTML =
+          '<span class="' + iconCls + '">' + icon + '</span>' +
+          '<span class="log-text">' +
+            '<div class="log-track">' + esc(artist + item.track_name) + '</div>' +
+            (album ? '<div class="log-album">' + esc(album) + '</div>' : '') +
+          '</span>' +
+          '<span class="log-meta">' + esc(meta) + '</span>';
+        log.appendChild(row);
+      }
+
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
+
+    function esc(s) {
+      return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    async function clearQueue() {
+      await fetch('/api/queue', { method: 'DELETE' });
+      $('qlog').innerHTML = '';
+    }
+
+    pollQueue();
+    setInterval(pollQueue, 2000);
   </script>
 </body>
 </html>`
