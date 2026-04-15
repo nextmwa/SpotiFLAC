@@ -111,6 +111,7 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 
 	// Register handlers
+	mux.HandleFunc("/", s.uiHandler)
 	mux.HandleFunc("/api/health", s.corsMiddleware(s.healthHandler))
 	mux.HandleFunc("/api/import", s.corsMiddleware(s.importHandler))
 	mux.HandleFunc("/api/queue", s.corsMiddleware(s.queueHandler))
@@ -155,6 +156,180 @@ func (s *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+
+// uiHandler serves the web importer UI
+func (s *Server) uiHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(uiHTML))
+}
+
+const uiHTML = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Music Importer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f13; color: #e0e0e0;
+      min-height: 100vh; display: flex;
+      align-items: center; justify-content: center; padding: 24px;
+    }
+    .card {
+      background: #1a1a24; border: 1px solid #2a2a3a;
+      border-radius: 12px; padding: 32px; width: 100%; max-width: 560px;
+    }
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 24px; color: #fff; }
+    h1 span { color: #1db954; }
+    label {
+      display: block; font-size: 12px; font-weight: 500; color: #888;
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;
+    }
+    .field { margin-bottom: 18px; }
+    input[type="text"], select {
+      width: 100%; background: #0f0f13; border: 1px solid #2a2a3a;
+      border-radius: 8px; padding: 10px 14px; color: #e0e0e0;
+      font-size: 14px; outline: none; transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, select:focus { border-color: #1db954; }
+    input[type="text"]::placeholder { color: #444; }
+    select option { background: #1a1a24; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .toggles { display: flex; gap: 16px; margin-bottom: 24px; }
+    .toggle-item {
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer; user-select: none;
+    }
+    .toggle-item input[type="checkbox"] { display: none; }
+    .toggle {
+      width: 40px; height: 22px; background: #2a2a3a;
+      border-radius: 11px; position: relative; transition: background 0.15s;
+    }
+    .toggle::after {
+      content: ''; position: absolute; top: 3px; left: 3px;
+      width: 16px; height: 16px; background: #fff;
+      border-radius: 50%; transition: left 0.15s;
+    }
+    .toggle-item input:checked + .toggle { background: #1db954; }
+    .toggle-item input:checked + .toggle::after { left: 21px; }
+    .toggle-label { font-size: 14px; color: #ccc; }
+    button {
+      width: 100%; padding: 12px; background: #1db954; color: #000;
+      font-size: 15px; font-weight: 600; border: none; border-radius: 8px;
+      cursor: pointer; transition: background 0.15s, opacity 0.15s;
+    }
+    button:hover { background: #1ed760; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status {
+      margin-top: 18px; padding: 12px 14px; border-radius: 8px;
+      font-size: 13px; display: none;
+    }
+    #status.success { background: #0d2818; border: 1px solid #1db954; color: #1db954; }
+    #status.error   { background: #280d0d; border: 1px solid #c0392b; color: #e74c3c; }
+    #status.loading { background: #0d1828; border: 1px solid #3498db; color: #3498db; }
+    pre { margin-top: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Music <span>Importer</span></h1>
+    <div class="field">
+      <label>Spotify URL</label>
+      <input type="text" id="url" placeholder="https://open.spotify.com/artist/..." autofocus>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Servizio</label>
+        <select id="service">
+          <option value="tidal">Tidal</option>
+          <option value="qobuz">Qobuz</option>
+          <option value="amazon">Amazon</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Qualità</label>
+        <select id="quality">
+          <option value="LOSSLESS">Lossless</option>
+          <option value="HI_RES_LOSSLESS">Hi-Res Lossless</option>
+          <option value="HIGH">High</option>
+          <option value="LOW">Low</option>
+        </select>
+      </div>
+    </div>
+    <div class="toggles">
+      <label class="toggle-item">
+        <input type="checkbox" id="embed_lyrics" checked>
+        <span class="toggle"></span>
+        <span class="toggle-label">Lyrics</span>
+      </label>
+      <label class="toggle-item">
+        <input type="checkbox" id="embed_cover" checked>
+        <span class="toggle"></span>
+        <span class="toggle-label">Cover</span>
+      </label>
+    </div>
+    <button id="btn" onclick="send()">Importa</button>
+    <div id="status"></div>
+  </div>
+  <script>
+    const $ = id => document.getElementById(id);
+    document.addEventListener('paste', e => {
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      if (text.includes('spotify.com') && !document.activeElement.matches('input')) {
+        $('url').value = text;
+      }
+    });
+    $('url').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+    async function send() {
+      const url = $('url').value.trim();
+      if (!url) { showStatus('Inserisci un URL Spotify.', 'error'); return; }
+      const payload = {
+        url,
+        service:      $('service').value,
+        quality:      $('quality').value,
+        embed_lyrics: $('embed_lyrics').checked,
+        embed_cover:  $('embed_cover').checked,
+      };
+      $('btn').disabled = true;
+      showStatus('Invio in corso...', 'loading');
+      try {
+        const res = await fetch('/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const text = await res.text();
+        let pretty;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { pretty = text; }
+        if (res.ok) {
+          showStatus('OK (' + res.status + ')\n' + pretty, 'success');
+          $('url').value = '';
+        } else {
+          showStatus('Errore ' + res.status + '\n' + pretty, 'error');
+        }
+      } catch (err) {
+        showStatus('Connessione fallita: ' + err.message, 'error');
+      } finally {
+        $('btn').disabled = false;
+      }
+    }
+    function showStatus(msg, type) {
+      const el = $('status');
+      el.style.display = 'block';
+      el.className = type;
+      const [first, ...rest] = msg.split('\n');
+      el.innerHTML = first + (rest.length ? '<pre>' + rest.join('\n') + '</pre>' : '');
+    }
+  </script>
+</body>
+</html>`
 
 // healthHandler handles GET /api/health
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -546,9 +721,16 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 		}
 
 		if folderArtist != "" && albumName != "" {
-			// Create folder structure: Artist Name/Album Title/
+			// Create folder structure: Artist Name/{Year} - {Album Title}/
 			artistFolder := backend.SanitizeFilename(folderArtist)
+			year := ""
+			if len(releaseDate) >= 4 {
+				year = releaseDate[:4]
+			}
 			albumFolder := backend.SanitizeFilename(albumName)
+			if year != "" {
+				albumFolder = year + " - " + albumFolder
+			}
 			trackOutputDir = filepath.Join(outputDir, artistFolder, albumFolder)
 		} else if folderArtist != "" {
 			// Single track without album - just use artist folder
@@ -571,8 +753,9 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 		}
 
 		// Create download request
-		// Filename format: {year} - {track} - {title}
-		// This produces: 2023 - 01 - Track Title.flac
+		// Filename format: {track} - {title}
+		// This produces: 10 - Salt And The Sea.flac
+		// Folder is already: Artist/{Year} - {Album}/
 		downloadReq := DownloadRequest{
 			Service:              service,
 			TrackName:            trackName,
@@ -583,7 +766,7 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 			CoverURL:             coverURL,
 			OutputDir:            trackOutputDir,
 			AudioFormat:          quality,
-			FilenameFormat:       "{year} - {track} - {title}",
+			FilenameFormat:       "{track} - {title}",
 			TrackNumber:          true,
 			Position:             trackNum,
 			UseAlbumTrackNumber:  true,
