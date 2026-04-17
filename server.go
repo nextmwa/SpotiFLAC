@@ -1053,7 +1053,7 @@ func (s *Server) downloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate,
 			req.CoverURL, req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks,
 			req.EmbedMaxQualityCover, req.SpotifyTotalDiscs, req.Copyright, req.Publisher,
-			spotifyURL, false, false, false,
+			"", ", ", "", spotifyURL, false, false, false,
 		)
 
 	case "tidal":
@@ -1064,7 +1064,7 @@ func (s *Server) downloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate,
 			req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover,
 			req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs,
-			req.Copyright, req.Publisher, spotifyURL, req.AllowFallback, false, false, false,
+			req.Copyright, req.Publisher, "", ", ", "", spotifyURL, req.AllowFallback, false, false, false,
 		)
 
 	case "qobuz":
@@ -1083,7 +1083,7 @@ func (s *Server) downloadTrack(req DownloadRequest) (DownloadResponse, error) {
 			req.TrackName, req.ArtistName, req.AlbumName, req.AlbumArtist, req.ReleaseDate,
 			req.UseAlbumTrackNumber, req.CoverURL, req.EmbedMaxQualityCover,
 			req.SpotifyTrackNumber, req.SpotifyDiscNumber, req.SpotifyTotalTracks, req.SpotifyTotalDiscs,
-			req.Copyright, req.Publisher, spotifyURL, req.AllowFallback, false, false, false,
+			req.Copyright, req.Publisher, "", ", ", spotifyURL, req.AllowFallback, false, false, false,
 		)
 
 	default:
