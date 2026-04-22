@@ -17,6 +17,19 @@ const (
 	tidalAPIListCacheFile = "tidal-api-urls.json"
 )
 
+// fallbackTidalAPIURLs is used when the gist is unreachable and the cache is empty.
+var fallbackTidalAPIURLs = []string{
+	"https://wolf.qqdl.site",
+	"https://triton.squid.wtf",
+	"https://hifi-one.spotisaver.net",
+	"https://hifi-two.spotisaver.net",
+	"https://eu-central.monochrome.tf",
+	"https://us-west.monochrome.tf",
+	"https://api.monochrome.tf",
+	"https://monochrome-api.samidy.com",
+	"https://tidal.kinoplus.online",
+}
+
 type tidalAPIListCache struct {
 	URLs        []string `json:"urls"`
 	LastUsedURL string   `json:"last_used_url,omitempty"`
@@ -159,7 +172,9 @@ func PrimeTidalAPIList() error {
 	}
 
 	if len(state.URLs) == 0 {
-		return fmt.Errorf("tidal api cache is empty")
+		fmt.Println("Tidal API cache is empty, seeding with fallback URLs...")
+		state.URLs = normalizeTidalAPIURLs(fallbackTidalAPIURLs)
+		_ = saveTidalAPIListStateLocked(state)
 	}
 
 	if state.UpdatedAt == 0 {
@@ -188,7 +203,8 @@ func RefreshTidalAPIList(force bool) ([]string, error) {
 		if len(state.URLs) > 0 {
 			return append([]string(nil), state.URLs...), fetchErr
 		}
-		return nil, fetchErr
+		fmt.Printf("Warning: failed to fetch Tidal API list from gist (%v), using fallback URLs\n", fetchErr)
+		return normalizeTidalAPIURLs(fallbackTidalAPIURLs), nil
 	}
 
 	state.URLs = urls
