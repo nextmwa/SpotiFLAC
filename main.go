@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/afkarxyz/SpotiFLAC/backend"
 
@@ -84,7 +85,7 @@ func runServerMode(port, outputDir, service, quality string, embedLyrics, embedC
 	go func() {
 		<-sigChan
 		log.Println("Shutting down server...")
-		ctx, cancel := context.WithTimeout(context.Background(), 10)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
 		os.Exit(0)

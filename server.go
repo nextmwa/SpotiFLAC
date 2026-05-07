@@ -98,6 +98,17 @@ func NewServer(config ServerConfig) *Server {
 	if err := backend.InitHistoryDB("SpotiFLAC"); err != nil {
 		log.Printf("Warning: Failed to init history DB: %v\n", err)
 	}
+	if err := backend.InitISRCCacheDB(); err != nil {
+		log.Printf("Warning: Failed to init ISRC cache DB: %v\n", err)
+	}
+	if err := backend.InitProviderPriorityDB(); err != nil {
+		log.Printf("Warning: Failed to init provider priority DB: %v\n", err)
+	}
+	go func() {
+		if err := backend.PrimeTidalAPIList(); err != nil {
+			log.Printf("Warning: Failed to prime Tidal API list: %v\n", err)
+		}
+	}()
 
 	return &Server{
 		config:   config,
@@ -138,6 +149,8 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	backend.CloseHistoryDB()
+	backend.CloseISRCCacheDB()
+	backend.CloseProviderPriorityDB()
 	return s.httpServer.Shutdown(ctx)
 }
 
