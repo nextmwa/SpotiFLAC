@@ -29,11 +29,13 @@ type ServerConfig struct {
 
 // Server is the HTTP server for SpotiFLAC
 type Server struct {
-	config     ServerConfig
-	jobQueue   chan ImportJob
-	jobs       map[string]*ImportJob
-	jobsMutex  sync.RWMutex
-	httpServer *http.Server
+	config              ServerConfig
+	jobQueue            chan ImportJob
+	jobs                map[string]*ImportJob
+	jobsMutex           sync.RWMutex
+	httpServer          *http.Server
+	failedRequests      map[string]DownloadRequest
+	failedRequestsMutex sync.RWMutex
 }
 
 // ImportRequest is the request body for POST /api/import
@@ -111,9 +113,10 @@ func NewServer(config ServerConfig) *Server {
 	}()
 
 	return &Server{
-		config:   config,
-		jobQueue: make(chan ImportJob, 100),
-		jobs:     make(map[string]*ImportJob),
+		config:         config,
+		jobQueue:       make(chan ImportJob, 100),
+		jobs:           make(map[string]*ImportJob),
+		failedRequests: make(map[string]DownloadRequest),
 	}
 }
 
@@ -129,6 +132,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/progress", s.corsMiddleware(s.progressHandler))
 	mux.HandleFunc("/api/history", s.corsMiddleware(s.historyHandler))
 	mux.HandleFunc("/api/jobs", s.corsMiddleware(s.jobsHandler))
+	mux.HandleFunc("/api/retry", s.corsMiddleware(s.retryHandler))
+	mux.HandleFunc("/api/retry-all", s.corsMiddleware(s.retryAllHandler))
 
 	s.httpServer = &http.Server{
 		Addr:    ":" + s.config.Port,
@@ -269,6 +274,17 @@ const uiHTML = `<!DOCTYPE html>
       background: transparent; color: #666; cursor: pointer; transition: color 0.15s, border-color 0.15s;
     }
     .btn-clear:hover { color: #e74c3c; border-color: #e74c3c; }
+    .btn-retry-all {
+      font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid #2a2a3a;
+      background: transparent; color: #e67e22; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+    }
+    .btn-retry-all:hover { color: #f39c12; border-color: #f39c12; }
+    .btn-retry {
+      font-size: 11px; padding: 2px 8px; border-radius: 5px; border: 1px solid #c0392b44;
+      background: transparent; color: #e74c3c; cursor: pointer; transition: opacity 0.15s;
+      white-space: nowrap; margin-left: 6px;
+    }
+    .btn-retry:hover { opacity: 0.7; }
     .queue-log {
       font-family: "SF Mono", "Fira Code", "Consolas", monospace;
       font-size: 12px; max-height: 420px; overflow-y: auto;
@@ -281,7 +297,7 @@ const uiHTML = `<!DOCTYPE html>
     .log-row {
       display: grid;
       grid-template-columns: 18px 1fr auto;
-      align-items: baseline;
+      align-items: center;
       gap: 10px;
       padding: 5px 20px;
       border-bottom: 1px solid #1a1a1f;
@@ -363,6 +379,7 @@ const uiHTML = `<!DOCTYPE html>
         <span class="stat stat-fail"    id="sf" style="display:none">&#10007; <span id="cnt-fail">0</span></span>
       </div>
       <div class="queue-actions">
+        <button class="btn-retry-all" id="btn-retry-all" style="display:none" onclick="retryAll()">&#8635; Riprova falliti</button>
         <button class="btn-clear" onclick="clearQueue()">Svuota</button>
       </div>
     </div>
@@ -469,6 +486,7 @@ const uiHTML = `<!DOCTYPE html>
       $('sd').style.display = cntD > 0 ? '' : 'none';
       $('ss').style.display = cntS > 0 ? '' : 'none';
       $('sf').style.display = cntF > 0 ? '' : 'none';
+      $('btn-retry-all').style.display = cntF > 0 ? '' : 'none';
 
       /* log rows — newest first (reverse) */
       const log = $('qlog');
@@ -480,32 +498,43 @@ const uiHTML = `<!DOCTYPE html>
         const status = item.status || 'queued';
         const icon   = ICONS[status] || '·';
 
-        let meta = '';
+        let metaText = '';
         if (status === 'downloading') {
           const parts = [];
           if (item.progress) parts.push(fmtSize(item.progress));
           if (item.speed)    parts.push(fmtSpeed(item.speed));
-          meta = parts.join(' · ');
+          metaText = parts.join(' · ');
         } else if (status === 'completed') {
-          meta = fmtSize(item.total_size) || 'ok';
+          metaText = fmtSize(item.total_size) || 'ok';
         } else if (status === 'failed') {
-          meta = item.error_message || 'errore';
+          metaText = item.error_message || 'errore';
         } else if (status === 'skipped') {
-          meta = 'già presente';
+          metaText = 'già presente';
         }
 
         const row = document.createElement('div');
         row.className = 'log-row s-' + status;
+        if (item.id) row.dataset.itemId = item.id;
         const iconCls = status === 'downloading' ? 'log-icon pulse' : 'log-icon';
         const artist = item.artist_name ? item.artist_name + ' — ' : '';
         const album  = item.album_name  ? item.album_name : '';
+
+        let metaCell = '<span class="log-meta">' + esc(metaText) + '</span>';
+        if (status === 'failed' && item.id) {
+          metaCell =
+            '<span class="log-meta" style="display:flex;align-items:center;gap:4px;">' +
+              '<span title="' + esc(metaText) + '" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(metaText) + '</span>' +
+              '<button class="btn-retry" onclick="retryItem(\'' + esc(item.id) + '\',this)">&#8635; Riprova</button>' +
+            '</span>';
+        }
+
         row.innerHTML =
           '<span class="' + iconCls + '">' + icon + '</span>' +
           '<span class="log-text">' +
             '<div class="log-track">' + esc(artist + item.track_name) + '</div>' +
             (album ? '<div class="log-album">' + esc(album) + '</div>' : '') +
           '</span>' +
-          '<span class="log-meta">' + esc(meta) + '</span>';
+          metaCell;
         log.appendChild(row);
       }
 
@@ -519,6 +548,47 @@ const uiHTML = `<!DOCTYPE html>
     async function clearQueue() {
       await fetch('/api/queue', { method: 'DELETE' });
       $('qlog').innerHTML = '';
+    }
+
+    async function retryItem(itemId, btn) {
+      btn.disabled = true;
+      btn.textContent = '...';
+      try {
+        const res = await fetch('/api/retry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_id: itemId }),
+        });
+        if (res.ok) {
+          btn.textContent = '&#10003;';
+          btn.style.color = '#1db954';
+        } else {
+          const data = await res.json().catch(() => ({}));
+          btn.textContent = '✗';
+          btn.style.color = '#e74c3c';
+          btn.title = data.error || 'Errore';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        btn.textContent = '✗';
+        btn.disabled = false;
+      }
+    }
+
+    async function retryAll() {
+      const btn = $('btn-retry-all');
+      btn.disabled = true;
+      btn.textContent = '...';
+      try {
+        const res = await fetch('/api/retry-all', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        btn.textContent = '&#8635; Riprova falliti';
+        if (!res.ok) btn.textContent = '✗ Errore';
+      } catch (e) {
+        btn.textContent = '&#8635; Riprova falliti';
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     pollQueue();
@@ -884,9 +954,17 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 	// Format: Artist Name - Album Name (Year)/
 	outputDir := s.config.OutputDir
 
+	// allServices defines the fallback order when a service fails
+	allServices := []string{"amazon", "tidal", "qobuz"}
+
 	// Process each track
 	successCount := 0
 	for i, track := range tracks {
+		// Minimum 5-second interval between tracks to avoid rate-limiting
+		if i > 0 {
+			log.Printf("Waiting 5s before next track to avoid rate limits...")
+			time.Sleep(5 * time.Second)
+		}
 		// Field names from AlbumTrackMetadata struct:
 		// spotify_id, name, artists, album_name, album_artist, images, release_date,
 		// track_number, disc_number, total_tracks, total_discs, duration_ms
@@ -979,10 +1057,18 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 			AllowFallback:        true,
 		}
 
-		// Download the track
-		resp, err := s.downloadTrack(downloadReq)
+		// Download the track with retry/fallback logic
+		resp, err := s.downloadTrackWithRetry(downloadReq, allServices)
 		if err != nil {
-			log.Printf("Failed to download track %s: %v", trackName, err)
+			// Store the request so the user can retry it from the UI
+			if resp.ItemID != "" {
+				s.failedRequestsMutex.Lock()
+				reqCopy := downloadReq
+				reqCopy.Service = service // restore original (primary) service
+				s.failedRequests[resp.ItemID] = reqCopy
+				s.failedRequestsMutex.Unlock()
+			}
+			log.Printf("Failed to download track %s after all retries: %v", trackName, err)
 			continue
 		}
 
@@ -991,6 +1077,14 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 			job.TracksQueued = successCount
 			log.Printf("Successfully downloaded: %s", resp.File)
 		} else {
+			// Not an error but still not successful (shouldn't normally happen)
+			if resp.ItemID != "" {
+				s.failedRequestsMutex.Lock()
+				reqCopy := downloadReq
+				reqCopy.Service = service
+				s.failedRequests[resp.ItemID] = reqCopy
+				s.failedRequestsMutex.Unlock()
+			}
 			log.Printf("Download failed for %s: %s", trackName, resp.Error)
 		}
 	}
@@ -1004,6 +1098,75 @@ func (s *Server) processImportJob(job *ImportJob, req ImportRequest, spotifyID s
 	}
 
 	log.Printf("Job %s completed: %d/%d tracks downloaded", job.ID, successCount, len(tracks))
+}
+
+// isRateLimitError returns true when the error string suggests an HTTP 429 / rate-limit response.
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "429") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "rate-limit") ||
+		strings.Contains(msg, "ratelimit")
+}
+
+// downloadTrackWithRetry attempts to download a track, retrying up to 3 times.
+// On each failure it cycles to the next available service and waits before retrying.
+// Rate-limit errors (429) trigger a longer back-off before the next attempt.
+func (s *Server) downloadTrackWithRetry(req DownloadRequest, allServices []string) (DownloadResponse, error) {
+	const maxAttempts = 3
+
+	primaryService := req.Service
+	if primaryService == "" {
+		primaryService = s.config.Service
+	}
+
+	// Build the service rotation list starting from the primary service.
+	serviceQueue := []string{primaryService}
+	for _, svc := range allServices {
+		if svc != primaryService {
+			serviceQueue = append(serviceQueue, svc)
+		}
+	}
+
+	var lastErr error
+	var lastResp DownloadResponse
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		svc := serviceQueue[attempt%len(serviceQueue)]
+		req.Service = svc
+
+		if attempt > 0 {
+			waitDuration := 15 * time.Second
+			if isRateLimitError(lastErr) {
+				waitDuration = 30 * time.Second
+				log.Printf("Rate-limit detected on %s, waiting %s before retry %d/%d...",
+					svc, waitDuration, attempt+1, maxAttempts)
+			} else {
+				log.Printf("Download failed on %s (%v), trying service %s in %s (attempt %d/%d)...",
+					serviceQueue[(attempt-1)%len(serviceQueue)], lastErr, svc, waitDuration, attempt+1, maxAttempts)
+			}
+			time.Sleep(waitDuration)
+		}
+
+		log.Printf("Attempting download via %s (attempt %d/%d): %s", svc, attempt+1, maxAttempts, req.TrackName)
+		resp, err := s.downloadTrack(req)
+		if err == nil && resp.Success {
+			return resp, nil
+		}
+
+		lastResp = resp
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("%s", resp.Error)
+		}
+		log.Printf("Attempt %d/%d failed for %s via %s: %v", attempt+1, maxAttempts, req.TrackName, svc, lastErr)
+	}
+
+	return DownloadResponse{Success: false, Error: lastErr.Error(), ItemID: lastResp.ItemID}, lastErr
 }
 
 // downloadTrack downloads a single track using the existing backend logic
@@ -1158,6 +1321,107 @@ func (s *Server) downloadTrack(req DownloadRequest) (DownloadResponse, error) {
 		AlreadyExists: alreadyExists,
 		ItemID:        itemID,
 	}, nil
+}
+
+// RetryRequest is the request body for POST /api/retry
+type RetryRequest struct {
+	ItemID string `json:"item_id"`
+}
+
+// retryHandler handles POST /api/retry — retries a single failed download
+func (s *Server) retryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RetryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemID == "" {
+		s.jsonResponse(w, http.StatusBadRequest, map[string]string{"error": "item_id required"})
+		return
+	}
+
+	s.failedRequestsMutex.RLock()
+	downloadReq, ok := s.failedRequests[req.ItemID]
+	s.failedRequestsMutex.RUnlock()
+
+	if !ok {
+		s.jsonResponse(w, http.StatusNotFound, map[string]string{"error": "item not found or already retried"})
+		return
+	}
+
+	// Remove from failed map (will be re-added if it fails again)
+	s.failedRequestsMutex.Lock()
+	delete(s.failedRequests, req.ItemID)
+	s.failedRequestsMutex.Unlock()
+
+	allServices := []string{"amazon", "tidal", "qobuz"}
+	go func() {
+		log.Printf("Retrying download for: %s - %s", downloadReq.ArtistName, downloadReq.TrackName)
+		resp, err := s.downloadTrackWithRetry(downloadReq, allServices)
+		if err != nil {
+			if resp.ItemID != "" {
+				s.failedRequestsMutex.Lock()
+				s.failedRequests[resp.ItemID] = downloadReq
+				s.failedRequestsMutex.Unlock()
+			}
+			log.Printf("Retry failed for %s: %v", downloadReq.TrackName, err)
+		} else {
+			log.Printf("Retry succeeded for %s: %s", downloadReq.TrackName, resp.File)
+		}
+	}()
+
+	s.jsonResponse(w, http.StatusAccepted, map[string]string{"message": "Retry started"})
+}
+
+// retryAllHandler handles POST /api/retry-all — retries all failed downloads
+func (s *Server) retryAllHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.failedRequestsMutex.Lock()
+	pending := make(map[string]DownloadRequest, len(s.failedRequests))
+	for k, v := range s.failedRequests {
+		pending[k] = v
+	}
+	// Clear immediately; failures will be re-added
+	s.failedRequests = make(map[string]DownloadRequest)
+	s.failedRequestsMutex.Unlock()
+
+	if len(pending) == 0 {
+		s.jsonResponse(w, http.StatusOK, map[string]string{"message": "No failed downloads to retry"})
+		return
+	}
+
+	allServices := []string{"amazon", "tidal", "qobuz"}
+	go func() {
+		i := 0
+		for _, downloadReq := range pending {
+			if i > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			i++
+			log.Printf("Retrying (%d/%d): %s - %s", i, len(pending), downloadReq.ArtistName, downloadReq.TrackName)
+			resp, err := s.downloadTrackWithRetry(downloadReq, allServices)
+			if err != nil {
+				if resp.ItemID != "" {
+					s.failedRequestsMutex.Lock()
+					s.failedRequests[resp.ItemID] = downloadReq
+					s.failedRequestsMutex.Unlock()
+				}
+				log.Printf("Retry failed for %s: %v", downloadReq.TrackName, err)
+			} else {
+				log.Printf("Retry succeeded for %s: %s", downloadReq.TrackName, resp.File)
+			}
+		}
+	}()
+
+	s.jsonResponse(w, http.StatusAccepted, map[string]interface{}{
+		"message": fmt.Sprintf("Retrying %d failed tracks", len(pending)),
+		"count":   len(pending),
+	})
 }
 
 // updateJobStatus updates a job's status
